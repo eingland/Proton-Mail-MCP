@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Secrets and certificates — none of this should ever be committed
+*.pem
+*.key
+credentials
+.env
+
+# Obsidian vault note — belongs in the vault, not the repo
+Proton Mail MCP.md
+.obsidian/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

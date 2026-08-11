@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "proton-mail": {
+      "command": "C:\\Path\\To\\python.exe",
+      "args": ["C:\\Tools\\proton-mcp\\proton_mcp.py"],
+      "env": {
+        "PROTON_BRIDGE_USER": "you@proton.me"
+      }
+    }
+  }
+}
