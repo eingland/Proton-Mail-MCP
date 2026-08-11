@@ -26,6 +26,10 @@ FOLDERS = [
     (r"\HasChildren", "Folders/Receipts"),
 ]
 
+# Invisible preheader padding, as real marketing mail sends it. Kept here so
+# the integration suite covers the case that made snippets useless in practice.
+PREHEADER_PADDING = ("͏‌­" * 40).encode("utf-8")
+
 MESSAGES = {
     101: (
         rb"\Seen",
@@ -50,7 +54,7 @@ MESSAGES = {
         b"--XB\r\n"
         b"Content-Type: text/plain; charset=utf-8\r\n"
         b"\r\n"
-        b"Doors open at 8am. Bring the confirmation.\r\n"
+        b"Doors open at 8am. Bring the confirmation." + PREHEADER_PADDING + b"\r\n"
         b"--XB\r\n"
         b"Content-Type: text/html; charset=utf-8\r\n"
         b"\r\n"

@@ -116,6 +116,15 @@ the server dies silently inside Claude Desktop. All diagnostics go to `stderr`.
 - Folder names are validated by `_enc_mailbox()` before hitting the wire. Every
   new IMAP call must route mailbox names through it — otherwise a folder
   argument can smuggle in extra IMAP commands.
+- Marketing mail pads its preheader with invisible characters (`U+034F`,
+  `U+200C`, `U+00AD` and friends) to control the inbox preview line. Found
+  against real mail: a 200-character snippet came back as 200 characters of
+  nothing. `strip_invisibles()` runs inside `extract_body()`, so every body and
+  snippet is cleaned at one chokepoint — don't bypass it by parsing payloads
+  directly. It also strips bidi controls, which can visually reorder text and
+  are a spoofing vector in content being handed to a model.
+- `\s` in Python does **not** match those characters, so collapsing whitespace
+  is not enough on its own.
 
 ## Scope discipline
 

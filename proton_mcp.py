@@ -325,6 +325,31 @@ def decode_hdr(raw: Optional[str]) -> str:
         return str(raw).strip()
 
 
+# Marketing mail pads its "preheader" with invisible characters so the preview
+# line in an inbox looks the way the sender wants. Left in, a 200-character
+# snippet can be 200 characters of nothing. The bidi controls in this set are
+# stripped for a second reason: they can visually reorder text, which is a
+# spoofing vector in content being handed to a language model.
+_INVISIBLE_RE = re.compile(
+    "["
+    "\u00ad"          # soft hyphen
+    "\u034f"          # combining grapheme joiner
+    "\u061c"          # arabic letter mark
+    "\u180e"          # mongolian vowel separator
+    "\u200b-\u200f"   # zero-width space/non-joiner/joiner, LRM, RLM
+    "\u202a-\u202e"   # bidi embedding and override
+    "\u2060-\u2064"   # word joiner, invisible operators
+    "\u2066-\u2069"   # bidi isolates
+    "\ufeff"          # zero-width no-break space / BOM
+    "]"
+)
+
+
+def strip_invisibles(text: str) -> str:
+    """Remove zero-width padding and bidi controls; normalise hard spaces."""
+    return _INVISIBLE_RE.sub("", text).replace("\u00a0", " ")
+
+
 def html_to_text(html: str) -> str:
     """Crude but dependency-free: drop script/style, strip tags, collapse space."""
     html = re.sub(r"(?is)<(script|style).*?</\1>", " ", html)
@@ -360,9 +385,9 @@ def extract_body(msg: email.message.Message) -> tuple[str, Optional[str]]:
 
     html = "\n".join(html_parts) if html_parts else None
     if plain_parts:
-        return "\n".join(plain_parts).strip(), html
+        return strip_invisibles("\n".join(plain_parts)).strip(), html
     if html:
-        return html_to_text(html), html
+        return strip_invisibles(html_to_text(html)), html
     return "", None
 
 

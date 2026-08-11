@@ -91,6 +91,51 @@ def build_msg(parts, subject="Test", frm="a@b.com"):
     return email.message_from_string("\r\n".join(raw))
 
 
+class TestStripInvisibles(unittest.TestCase):
+    """Regression: real marketing mail pads its preheader with invisible
+    characters, which turned a 200-char snippet into 200 chars of nothing."""
+
+    PADDING = "͏‌­" * 40
+
+    def test_removes_preheader_padding(self):
+        self.assertEqual(P.strip_invisibles(self.PADDING), "")
+
+    def test_keeps_real_text(self):
+        got = P.strip_invisibles(f"Good on food{self.PADDING}, groceries")
+        self.assertEqual(got, "Good on food, groceries")
+
+    def test_removes_each_category(self):
+        for ch in ("­", "͏", "​", "‌", "‍", "⁠", "﻿"):
+            with self.subTest(ch=hex(ord(ch))):
+                self.assertEqual(P.strip_invisibles(f"a{ch}b"), "ab")
+
+    def test_removes_bidi_overrides(self):
+        """These can visually reorder text - a spoofing vector, not just noise."""
+        for ch in ("‮", "‭", "⁦", "⁩", "‏"):
+            with self.subTest(ch=hex(ord(ch))):
+                self.assertEqual(P.strip_invisibles(f"a{ch}b"), "ab")
+
+    def test_nbsp_becomes_a_real_space(self):
+        self.assertEqual(P.strip_invisibles("a b"), "a b")
+
+    def test_leaves_ordinary_unicode_alone(self):
+        for text in ("Café", "naïve", "日本語", "emoji 🎉", "em — dash"):
+            with self.subTest(text=text):
+                self.assertEqual(P.strip_invisibles(text), text)
+
+    def test_padded_body_yields_a_readable_snippet(self):
+        raw = (
+            b"From: DoorDash <no-reply@example.com>\r\n"
+            b"Subject: Credits for you\r\n"
+            b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+            + f"Good on food, groceries, and more.{self.PADDING}".encode()
+        )
+        out = P.parse_full_fetch([(b"1 (UID 5 FLAGS ())", raw)], 200)
+        snippet = out[0]["snippet"]
+        self.assertEqual(snippet, "Good on food, groceries, and more.")
+        self.assertLess(len(snippet), 40, "padding should not eat the budget")
+
+
 class TestExtractBody(unittest.TestCase):
     def test_prefers_plain_over_html(self):
         msg = build_msg(

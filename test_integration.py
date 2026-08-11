@@ -216,6 +216,14 @@ class TestLiveSnippets(LiveBridgeTest):
     def test_carries_the_untrusted_warning(self):
         self.assertIn("UNTRUSTED", self.P.op_list_snippets("INBOX", 25)["warning"])
 
+    def test_invisible_preheader_padding_is_stripped(self):
+        """Found against real mail: padding ate the entire snippet budget."""
+        by_uid = {m["uid"]: m for m in self.P.op_list_snippets("INBOX", 25)["messages"]}
+        snippet = by_uid[102]["snippet"]
+        self.assertEqual(snippet, "Doors open at 8am. Bring the confirmation.")
+        for ch in ("͏", "‌", "­"):
+            self.assertNotIn(ch, snippet)
+
     def test_does_not_mark_mail_read(self):
         self.server.commands.clear()
         self.P.op_list_snippets("INBOX", 25)
