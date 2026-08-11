@@ -6,10 +6,11 @@ Bridge itself already makes to Proton.
 
 Windows-oriented, Python standard library only, no dependencies to install.
 
-> **Status: personal project, shared as-is.** It does what I need and I'm not
-> taking feature requests or offering support. Issues are disabled. Fork it
-> freely — MIT licensed. Read the Security notes before pointing it at a
-> mailbox you care about.
+> **Status: personal project, shared as-is.** Written with Claude, then tested
+> against a live Proton Bridge — the 176-test suite in this repo is how I check
+> it still behaves. It does what I need and I'm not taking feature requests or
+> offering support. Issues are disabled. Fork it freely — MIT licensed. Read
+> the Security notes before pointing it at a mailbox you care about.
 
 ## What it can and can't do
 
