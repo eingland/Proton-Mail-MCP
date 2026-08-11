@@ -97,7 +97,8 @@ class TestLiveListFolders(LiveBridgeTest):
     def test_all_folders_returned(self):
         names = [f["name"] for f in self.P.op_list_folders()]
         self.assertEqual(
-            names, ["INBOX", "Drafts", "Sent", "Archive", "Folders/Receipts"]
+            names,
+            ["INBOX", "Drafts", "Sent", "Archive", "Folders", "Folders/Receipts"],
         )
 
     def test_special_use_flags_survive(self):
@@ -106,13 +107,13 @@ class TestLiveListFolders(LiveBridgeTest):
 
 
 class TestLiveListRecent(LiveBridgeTest):
-    def test_returns_both_messages(self):
+    def test_returns_all_messages(self):
         out = self.P.op_list_recent("INBOX", 25)
-        self.assertEqual(len(out), 2)
+        self.assertEqual(len(out), 3)
 
     def test_newest_first(self):
         out = self.P.op_list_recent("INBOX", 25)
-        self.assertEqual([m["uid"] for m in out], [102, 101])
+        self.assertEqual([m["uid"] for m in out], [103, 102, 101])
 
     def test_uids_parsed_from_real_fetch(self):
         """The bug that bit other Proton MCP servers: UID coming back None."""
@@ -153,6 +154,105 @@ class TestLiveSearch(LiveBridgeTest):
         joined = b" ".join(self.server.commands)
         self.assertIn(b"01-Aug-2026", joined)
         self.assertNotIn(b"2026-08-01", joined)
+
+
+class TestLiveFolderStats(LiveBridgeTest):
+    def test_counts_returned_for_selectable_folders(self):
+        stats = {s["folder"]: s for s in self.P.op_folder_stats()}
+        self.assertIn("INBOX", stats)
+        self.assertEqual(stats["INBOX"]["total"], 3)
+        self.assertEqual(stats["INBOX"]["unread"], 1)
+
+    def test_noselect_container_is_skipped(self):
+        names = [s["folder"] for s in self.P.op_folder_stats()]
+        self.assertNotIn("Folders", names)
+        self.assertIn("Folders/Receipts", names)
+
+    def test_busiest_first(self):
+        unread = [s["unread"] for s in self.P.op_folder_stats()]
+        self.assertEqual(unread, sorted(unread, reverse=True))
+
+
+class TestLiveThread(LiveBridgeTest):
+    def test_finds_the_reply(self):
+        thread = self.P.op_get_thread(101, "INBOX")
+        self.assertEqual([m["uid"] for m in thread], [101, 103])
+
+    def test_works_from_either_end(self):
+        """Starting at the reply must find the original too."""
+        thread = self.P.op_get_thread(103, "INBOX")
+        self.assertEqual([m["uid"] for m in thread], [101, 103])
+
+    def test_oldest_first(self):
+        thread = self.P.op_get_thread(101, "INBOX")
+        self.assertEqual(thread[0]["subject"], "Lunch on Thursday")
+        self.assertTrue(thread[-1]["subject"].startswith("Re:"))
+
+    def test_results_carry_folder(self):
+        for m in self.P.op_get_thread(101, "INBOX"):
+            self.assertEqual(m["folder"], "INBOX")
+
+    def test_unrelated_message_is_a_thread_of_one(self):
+        self.assertEqual([m["uid"] for m in self.P.op_get_thread(102, "INBOX")], [102])
+
+    def test_unknown_uid_raises(self):
+        with self.assertRaises(RuntimeError):
+            self.P.op_get_thread(9999, "INBOX")
+
+
+class TestLiveSnippets(LiveBridgeTest):
+    def test_returns_snippets_for_each_message(self):
+        out = self.P.op_list_snippets("INBOX", 25)
+        self.assertEqual(len(out["messages"]), 3)
+        for m in out["messages"]:
+            self.assertTrue(m["snippet"])
+
+    def test_snippet_content_is_the_plain_text_body(self):
+        by_uid = {m["uid"]: m for m in self.P.op_list_snippets("INBOX", 25)["messages"]}
+        self.assertIn("Table booked for noon", by_uid[101]["snippet"])
+        self.assertIn("Doors open at 8am", by_uid[102]["snippet"])
+        self.assertNotIn("<b>", by_uid[102]["snippet"])
+
+    def test_carries_the_untrusted_warning(self):
+        self.assertIn("UNTRUSTED", self.P.op_list_snippets("INBOX", 25)["warning"])
+
+    def test_does_not_mark_mail_read(self):
+        self.server.commands.clear()
+        self.P.op_list_snippets("INBOX", 25)
+        joined = b" ".join(self.server.commands).upper()
+        self.assertIn(b"EXAMINE", joined)
+        self.assertIn(b"BODY.PEEK[]", joined)
+
+    def test_truncates_to_requested_length(self):
+        out = self.P.op_list_snippets("INBOX", 25, snippet_chars=60)
+        for m in out["messages"]:
+            self.assertLessEqual(len(m["snippet"]), 61)  # +1 for the ellipsis
+
+    def test_snippet_chars_has_a_floor(self):
+        """Below 50 the request is clamped up - a 5-char snippet is useless."""
+        out = self.P.op_list_snippets("INBOX", 25, snippet_chars=5)
+        longest = max(len(m["snippet"]) for m in out["messages"])
+        self.assertGreater(longest, 5)
+        self.assertLessEqual(longest, 51)
+
+
+class TestLiveMultiFolderSearch(LiveBridgeTest):
+    def test_searches_multiple_folders(self):
+        out = self.P.op_search_messages(folders=["INBOX", "Archive"], unseen_only=True)
+        self.assertEqual({m["folder"] for m in out}, {"INBOX", "Archive"})
+
+    def test_every_result_names_its_folder(self):
+        for m in self.P.op_search_messages(folders=["INBOX", "Archive"]):
+            self.assertIn(m["folder"], ("INBOX", "Archive"))
+
+    def test_merged_results_are_newest_first(self):
+        out = self.P.op_search_messages(folders=["INBOX", "Archive"])
+        keys = [self.P._date_sort_key(m) for m in out]
+        self.assertEqual(keys, sorted(keys, reverse=True))
+
+    def test_limit_caps_the_merged_total(self):
+        out = self.P.op_search_messages(folders=["INBOX", "Archive"], limit=4)
+        self.assertEqual(len(out), 4)
 
 
 class TestLiveRead(LiveBridgeTest):
@@ -359,8 +459,27 @@ class TestFullStackOverMCP(unittest.TestCase):
 
     def test_list_recent_over_mcp(self):
         data, _ = self.call("list_recent", {"folder": "INBOX", "limit": 5})
-        self.assertEqual(len(data), 2)
-        self.assertEqual(data[0]["uid"], 102)
+        self.assertEqual(len(data), 3)
+        self.assertEqual(data[0]["uid"], 103)
+
+    def test_folder_stats_over_mcp(self):
+        data, _ = self.call("get_folder_stats", {})
+        self.assertIn("INBOX", [s["folder"] for s in data])
+
+    def test_get_thread_over_mcp(self):
+        data, _ = self.call("get_thread", {"uid": 101, "folder": "INBOX"})
+        self.assertEqual([m["uid"] for m in data], [101, 103])
+
+    def test_list_snippets_over_mcp(self):
+        data, _ = self.call("list_snippets", {"folder": "INBOX", "limit": 5})
+        self.assertIn("UNTRUSTED", data["warning"])
+        self.assertEqual(len(data["messages"]), 3)
+
+    def test_multi_folder_search_over_mcp(self):
+        data, _ = self.call(
+            "search_messages", {"folders": ["INBOX", "Archive"], "limit": 10}
+        )
+        self.assertEqual({m["folder"] for m in data}, {"INBOX", "Archive"})
 
     def test_read_message_over_mcp(self):
         data, _ = self.call("read_message", {"uid": 101, "folder": "INBOX"})

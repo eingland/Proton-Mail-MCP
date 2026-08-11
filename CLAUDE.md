@@ -18,9 +18,20 @@ thing it was built to be. Several have tests enforcing them; if a test in
    in the README and the reason the project exists in this shape.
 2. **No destructive operations.** No delete, move, expunge, trash, or batch
    mutation. The only write is APPEND-to-Drafts, plus an opt-in `\Seen` flag.
-3. **Tool surface stays at exactly five**: `list_folders`, `list_recent`,
-   `search_messages`, `read_message`, `save_draft`. Adding tools widens the
-   prompt-injection blast radius — that trade was made deliberately.
+3. **Tool surface stays at exactly eight**: `list_folders`, `get_folder_stats`,
+   `list_recent`, `list_snippets`, `search_messages`, `get_thread`,
+   `read_message`, `save_draft`. Seven read, one write. Adding tools widens the
+   prompt-injection blast radius — every addition is a deliberate trade, not a
+   convenience.
+
+   Explicitly rejected, and not to be added without the user asking directly:
+   anything that moves, labels, flags in bulk, or deletes. The risk there isn't
+   losing mail — Proton keeps Trash for 30 days — it's *hiding* it. An injected
+   instruction that quietly archives or marks-read a security alert costs the
+   attacker nothing and buys them silence. `mark_all_read` and any
+   search-and-move variant are the sharpest examples. Attachment download to
+   disk and PDF text extraction are also out: the first writes
+   attacker-influenced files, the second needs a dependency.
 4. **Zero third-party runtime dependencies.** Standard library only. `keyring`
    is optional and lazily imported *inside* `_keyring()` — never hoist it to
    module scope, and never add a `requirements.txt`.

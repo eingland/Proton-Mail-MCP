@@ -281,6 +281,11 @@ class FakeIMAP:
     def noop(self):
         return ("OK", [b"NOOP completed"])
 
+    def status(self, mailbox, names):
+        self.calls.append(("status", mailbox, names))
+        unseen = sum(1 for _ in self.messages) - 1
+        return ("OK", [f'{mailbox} (MESSAGES {len(self.messages)} UNSEEN {unseen})'.encode()])
+
     def list(self, *a, **kw):
         self.calls.append(("list",))
         return ("OK", self.folders)
@@ -309,10 +314,17 @@ class FakeIMAP:
                     hdrs = raw.split(b"\r\n\r\n")[0] + b"\r\n\r\n"
                     out.append((f"1 (UID {u} FLAGS ())".encode(), hdrs))
                 return ("OK", out)
-            u = int(str(uid_arg))
-            if u not in self.messages:
-                return ("OK", [None])
-            return ("OK", [(f"1 (UID {u})".encode(), self.messages[u])])
+            out = []
+            for token in str(uid_arg).split(","):
+                try:
+                    u = int(token)
+                except ValueError:
+                    continue
+                if u in self.messages:
+                    out.append(
+                        (f"1 (UID {u} FLAGS ())".encode(), self.messages[u])
+                    )
+            return ("OK", out or [None])
         return ("OK", [b""])
 
     def append(self, mailbox, flags, date_time, message):
@@ -471,6 +483,119 @@ class TestSaveDraft(IMAPOpTest):
         self.assertEqual(len(self.fake.appended), 1)
 
 
+class TestFolderStats(IMAPOpTest):
+    def test_returns_counts_per_folder(self):
+        stats = P.op_folder_stats()
+        self.assertTrue(stats)
+        self.assertEqual(set(stats[0]), {"folder", "total", "unread"})
+
+    def test_skips_noselect_containers(self):
+        """Proton's 'Folders' and 'Labels' parents hold no mail; STATUS errors."""
+        self.fake.folders = [
+            rb'(\HasNoChildren) "/" "INBOX"',
+            rb'(\Noselect \HasChildren) "/" "Folders"',
+        ]
+        names = [s["folder"] for s in P.op_folder_stats()]
+        self.assertEqual(names, ["INBOX"])
+        self.assertNotIn("Folders", names)
+
+    def test_sorted_by_unread_first(self):
+        stats = P.op_folder_stats()
+        unread = [s["unread"] for s in stats]
+        self.assertEqual(unread, sorted(unread, reverse=True))
+
+
+class TestStatusParsing(unittest.TestCase):
+    def test_parses_both_counts(self):
+        got = P.parse_status(b'"INBOX" (MESSAGES 42 UNSEEN 3)')
+        self.assertEqual(got["messages"], 42)
+        self.assertEqual(got["unseen"], 3)
+
+    def test_order_independent(self):
+        got = P.parse_status(b'"X" (UNSEEN 7 MESSAGES 9)')
+        self.assertEqual((got["messages"], got["unseen"]), (9, 7))
+
+    def test_missing_keys_absent(self):
+        self.assertEqual(P.parse_status(b'"X" ()'), {})
+
+
+class TestMultiFolderSearch(IMAPOpTest):
+    def test_single_folder_tags_results(self):
+        out = P.op_search_messages(folder="Archive", from_addr="a@b.com")
+        for m in out:
+            self.assertEqual(m["folder"], "Archive")
+
+    def test_searches_each_folder(self):
+        P.op_search_messages(folders=["INBOX", "Archive"], subject="x")
+        selected = [c[1] for c in self.fake.calls if c[0] == "select"]
+        self.assertIn('"INBOX"', selected)
+        self.assertIn('"Archive"', selected)
+
+    def test_results_carry_their_folder(self):
+        out = P.op_search_messages(folders=["INBOX", "Archive"], subject="x")
+        self.assertEqual({m["folder"] for m in out}, {"INBOX", "Archive"})
+
+    def test_limit_applies_across_folders(self):
+        out = P.op_search_messages(folders=["INBOX", "Archive"], subject="x", limit=2)
+        self.assertEqual(len(out), 2)
+
+    def test_empty_folder_list_falls_back_to_single_folder(self):
+        out = P.op_search_messages(folder="Archive", folders=[], subject="x")
+        self.assertEqual({m["folder"] for m in out}, {"Archive"})
+
+    def test_all_blank_folder_names_rejected(self):
+        with self.assertRaises(ValueError):
+            P.op_search_messages(folders=["", None])
+
+
+class TestDateSortKey(unittest.TestCase):
+    def test_orders_real_dates(self):
+        older = {"date": "Mon, 10 Aug 2026 09:00:00 -0500"}
+        newer = {"date": "Tue, 11 Aug 2026 09:00:00 -0500"}
+        self.assertLess(P._date_sort_key(older), P._date_sort_key(newer))
+
+    def test_garbage_date_sorts_last_without_raising(self):
+        self.assertLess(P._date_sort_key({"date": "not a date"}),
+                        P._date_sort_key({"date": "Mon, 10 Aug 2026 09:00:00 -0500"}))
+
+    def test_missing_date_does_not_raise(self):
+        P._date_sort_key({})
+
+
+class TestSnippets(IMAPOpTest):
+    def test_returns_warning_and_messages(self):
+        out = P.op_list_snippets("INBOX", 10)
+        self.assertIn("UNTRUSTED", out["warning"])
+        self.assertEqual(out["folder"], "INBOX")
+        self.assertTrue(out["messages"])
+
+    def test_snippet_present_and_collapsed(self):
+        snip = P.op_list_snippets("INBOX", 10)["messages"][0]["snippet"]
+        self.assertIn("Table booked for noon", snip)
+        self.assertNotIn("\n", snip)
+
+    def test_snippet_truncated_to_requested_length(self):
+        out = P.op_list_snippets("INBOX", 10, snippet_chars=50)
+        for m in out["messages"]:
+            self.assertLessEqual(len(m["snippet"]), 51)  # +1 for the ellipsis
+
+    def test_snippet_chars_is_clamped(self):
+        P.op_list_snippets("INBOX", 10, snippet_chars=999999)
+        P.op_list_snippets("INBOX", 10, snippet_chars="garbage")
+
+    def test_uses_peek_so_reading_is_not_implied(self):
+        P.op_list_snippets("INBOX", 10)
+        fetch = [c for c in self.fake.calls if c[:2] == ("uid", "FETCH")][0]
+        self.assertIn("BODY.PEEK[]", fetch[-1])
+        self.assertTrue(self.fake.select_readonly)
+
+    def test_empty_folder_returns_warning_and_no_messages(self):
+        self.fake.messages = {}
+        out = P.op_list_snippets("INBOX", 10)
+        self.assertEqual(out["messages"], [])
+        self.assertIn("UNTRUSTED", out["warning"])
+
+
 # ==========================================================================
 # 3. Safety properties
 # ==========================================================================
@@ -496,11 +621,25 @@ class TestNoSendCapability(unittest.TestCase):
                 any(forbidden in n for n in names), f"found {forbidden} tool"
             )
 
-    def test_tool_surface_is_exactly_five(self):
+    def test_tool_surface_is_locked(self):
+        """Widening this is a deliberate act - update CLAUDE.md in the same commit."""
         self.assertEqual(
             sorted(P.HANDLERS),
-            ["list_folders", "list_recent", "read_message", "save_draft", "search_messages"],
+            [
+                "get_folder_stats",
+                "get_thread",
+                "list_folders",
+                "list_recent",
+                "list_snippets",
+                "read_message",
+                "save_draft",
+                "search_messages",
+            ],
         )
+
+    def test_only_one_tool_mutates(self):
+        writers = [t["name"] for t in P.TOOLS if not t["annotations"]["readOnlyHint"]]
+        self.assertEqual(writers, ["save_draft"])
 
     def test_every_tool_has_a_schema(self):
         for tool in P.TOOLS:
@@ -577,11 +716,20 @@ class TestProtocol(unittest.TestCase):
     def test_tools_list(self):
         out, proc = rpc(INIT, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         tools = out[1]["result"]["tools"]
-        self.assertEqual(len(tools), 5)
+        self.assertEqual(len(tools), 8)
         names = {t["name"] for t in tools}
         self.assertEqual(
             names,
-            {"list_folders", "list_recent", "search_messages", "read_message", "save_draft"},
+            {
+                "list_folders",
+                "list_recent",
+                "search_messages",
+                "read_message",
+                "save_draft",
+                "get_folder_stats",
+                "get_thread",
+                "list_snippets",
+            },
         )
 
     def test_tools_list_schemas_are_valid_json_schema(self):

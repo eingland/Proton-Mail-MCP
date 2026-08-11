@@ -16,10 +16,16 @@ Windows-oriented, Python standard library only, no dependencies to install.
 | Tool | What it does |
 |---|---|
 | `list_folders` | List every folder and label |
+| `get_folder_stats` | Total and unread counts for every folder, busiest first |
 | `list_recent` | Newest messages in a folder, headers only |
-| `search_messages` | Search by sender, recipient, subject, body, date, unread |
+| `list_snippets` | Newest messages with a short body preview, for triage in one call |
+| `search_messages` | Search by sender, recipient, subject, body, date, unread — across one folder or several |
+| `get_thread` | Reconstruct a conversation from `References` headers |
 | `read_message` | Full message by UID. Does **not** mark it read unless you ask |
 | `save_draft` | Write a draft into your Drafts folder |
+
+UIDs are per-folder. `search_messages` and `get_thread` return a `folder` field
+on every result — pass it back to `read_message` or the UID won't resolve.
 
 **It cannot send email.** `smtplib` is never imported — there is no code path
 in the server capable of transmitting a message to anyone. Drafts land in

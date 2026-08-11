@@ -20,6 +20,9 @@ FOLDERS = [
     (r"\HasNoChildren \Drafts", "Drafts"),
     (r"\HasNoChildren \Sent", "Sent"),
     (r"\HasNoChildren", "Archive"),
+    # Proton exposes container-only parents that cannot be selected. Real
+    # output from a live Bridge shows both "Folders" and "Labels" like this.
+    (r"\Noselect \HasChildren", "Folders"),
     (r"\HasChildren", "Folders/Receipts"),
 ]
 
@@ -53,6 +56,20 @@ MESSAGES = {
         b"\r\n"
         b"<html><body><p>Gates open at <b>8am</b>.</p></body></html>\r\n"
         b"--XB--\r\n",
+    ),
+    # A reply to 101, so thread reconstruction has something to find.
+    103: (
+        rb"\Seen",
+        b"From: user@example.com\r\n"
+        b"To: Alex Rivera <alex@example.com>\r\n"
+        b"Subject: Re: Lunch on Thursday\r\n"
+        b"Date: Tue, 11 Aug 2026 09:15:00 -0500\r\n"
+        b"Message-ID: <reply789@example.com>\r\n"
+        b"In-Reply-To: <abc123@example.com>\r\n"
+        b"References: <abc123@example.com>\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n"
+        b"\r\n"
+        b"Noon works. See you there.\r\n",
     ),
 }
 
@@ -102,6 +119,14 @@ class FakeBridge:
 
     def _headers_of(self, raw):
         return raw.split(b"\r\n\r\n", 1)[0] + b"\r\n\r\n"
+
+    @staticmethod
+    def _header_value(raw, name):
+        """Concatenated value of one header, lowercased, for HEADER searches."""
+        import email as _email
+
+        msg = _email.message_from_bytes(raw.split(b"\r\n\r\n", 1)[0])
+        return " ".join(str(v) for v in msg.get_all(name, [])).lower()
 
     # -- session ---------------------------------------------------------
 
@@ -155,6 +180,18 @@ class FakeBridge:
                     state = "READ-ONLY" if ro else "READ-WRITE"
                     self._send(f, f"{tag} OK [{state}] {cmd} completed\r\n".encode())
 
+                elif cmd == "STATUS":
+                    name = rest.split('"')[1] if '"' in rest else rest.split()[0]
+                    unseen = sum(
+                        1 for fl, _ in MESSAGES.values() if b"\\Seen" not in fl
+                    )
+                    self._send(
+                        f,
+                        f'* STATUS "{name}" (MESSAGES {len(MESSAGES)} '
+                        f"UNSEEN {unseen})\r\n".encode(),
+                    )
+                    self._send(f, f"{tag} OK STATUS completed\r\n".encode())
+
                 elif cmd == "UID":
                     self._handle_uid(f, tag, rest)
 
@@ -178,13 +215,28 @@ class FakeBridge:
 
         if op == "SEARCH":
             hits = sorted(MESSAGES)
+            header_m = re.search(r'HEADER\s+(\S+)\s+"([^"]+)"', args, re.I)
+            if header_m:
+                name, value = header_m.group(1).lower(), header_m.group(2).lower()
+                hits = [
+                    u
+                    for u in hits
+                    if value in self._header_value(MESSAGES[u][1], name)
+                ]
+                self._send(f, ("* SEARCH " + " ".join(str(u) for u in hits) + "\r\n").encode())
+                self._send(f, f"{tag} OK SEARCH completed\r\n".encode())
+                return
             if "UNSEEN" in args.upper():
                 hits = [u for u, (fl, _) in MESSAGES.items() if b"\\Seen" not in fl]
             if "FROM" in args.upper():
                 m = re.search(r'FROM "?([^"\s]+)"?', args, re.I)
                 if m:
-                    needle = m.group(1).lower().encode()
-                    hits = [u for u in hits if needle in MESSAGES[u][1].lower()]
+                    needle = m.group(1).lower()
+                    hits = [
+                        u
+                        for u in hits
+                        if needle in self._header_value(MESSAGES[u][1], "from")
+                    ]
             self._send(f, ("* SEARCH " + " ".join(str(u) for u in hits) + "\r\n").encode())
             self._send(f, f"{tag} OK SEARCH completed\r\n".encode())
             return
