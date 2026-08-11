@@ -15,6 +15,9 @@ credentials
 Proton Mail MCP.md
 .obsidian/
 
+# Claude Code — share settings.json, keep personal overrides local
+.claude/settings.local.json
+
 # Editors / OS
 .vscode/
 .idea/
